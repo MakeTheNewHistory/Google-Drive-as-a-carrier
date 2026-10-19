@@ -133,6 +133,8 @@ export interface ResolveVaultFolderOptions {
 	requireExplicitRecovery?: boolean;
 	/** Only meaningful with a saved ID; prevents a copied or replaced folder from being adopted. */
 	expectedFingerprint?: string;
+	/** A user explicitly chose the remembered history despite visible duplicates. */
+	explicitChoice?: boolean;
 }
 
 /**
@@ -166,6 +168,16 @@ export async function resolveVaultFolder(api: DriveApi, opts: ResolveVaultFolder
 					((identity.vaultId !== null && identity.vaultId !== opts.vaultId) ||
 						(opts.expectedFingerprint && identity.fingerprint !== opts.expectedFingerprint))) {
 					throw new FolderRecoveryRequired("The remembered Drive folder does not match this vault's identity. Sync stopped without writing; choose a verified folder or start a new Drive history.");
+				}
+			for (const other of opts.explicitChoice ? [] : candidates) {
+				if (other.id === savedId) continue;
+					const candidate = await inspectFolderFingerprint(api, other.id);
+					if (candidate.kind === "identified" && candidate.vaultId === opts.vaultId) {
+						throw new FolderRecoveryRequired("Another initialized Drive folder holds this vault. Sync paused; choose the intended history explicitly.");
+					}
+					if (candidate.kind === "unreadable" || (candidate.kind === "identified" && candidate.vaultId === null)) {
+						throw new FolderRecoveryRequired("Another Drive folder has an unknown identity. Sync paused; inspect it before choosing a history.");
+					}
 				}
 			}
 			const others = candidates.filter((f) => f.id !== savedId);

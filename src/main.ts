@@ -2505,6 +2505,7 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			if (vaultChanged) {
 				delete settings.driveFolderId;
 				delete settings.driveFolderFingerprint;
+				delete settings.driveFolderChoiceConfirmed;
 				delete settings.driveHostedUrlUsed;
 			}
 			// F4: which custom address served this sign-in (default service: not recorded).
@@ -2719,6 +2720,7 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 				await this.updateSettings((settings) => {
 					settings.driveFolderId = id;
 					settings.driveFolderFingerprint = fingerprint;
+					settings.driveFolderChoiceConfirmed = true;
 				}, "settings:drive-folder-recovery");
 				new Notice("Verified Drive folder saved. Reload the plugin to resume syncing.", 10000);
 			},
@@ -2729,6 +2731,7 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 				await this.updateSettings((settings) => {
 					settings.driveFolderId = id;
 					delete settings.driveFolderFingerprint;
+					settings.driveFolderChoiceConfirmed = true;
 				}, "settings:drive-folder-new-history");
 				new Notice("A separate Drive folder was created. Reload the plugin to begin a new history; other devices must be set up for it separately.", 12000);
 			},
@@ -2766,9 +2769,11 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			folderIdentity: {
 				saved: () => this.settings.driveFolderId,
 				savedFingerprint: () => this.settings.driveFolderFingerprint,
+				choiceConfirmed: () => this.settings.driveFolderChoiceConfirmed === true,
 				remember: async (id, fingerprint) => {
 					if (!id || (this.settings.driveFolderId === id && this.settings.driveFolderFingerprint === fingerprint)) return;
 					await this.updateSettings((settings) => {
+						if (settings.driveFolderId !== id) delete settings.driveFolderChoiceConfirmed;
 						settings.driveFolderId = id;
 						if (fingerprint) settings.driveFolderFingerprint = fingerprint;
 						else delete settings.driveFolderFingerprint;

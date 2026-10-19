@@ -3,6 +3,7 @@ import { randomId } from "../utils/randomId";
 import { ensureFolder, oldestFirst, resolveVaultFolder } from "./driveFolders";
 import { inspectFolderFingerprint } from "./folderFingerprint";
 import { FolderRecoveryRequired } from "./folderSelection";
+import { enrollUnambiguousLegacyFolder } from "./legacyFolderEnrollment";
 import {
 	DEFAULT_KDF_ITERATIONS,
 	EncryptionError,
@@ -43,6 +44,7 @@ export interface DriveKeyringOptions {
 	/** Shared with the transport so attachments/snapshots cannot adopt another folder first. */
 	savedFolderId?: () => string | undefined;
 	savedFingerprint?: () => string | undefined;
+	choiceConfirmed?: () => boolean;
 	requireExplicitRecovery?: boolean;
 	onFolderRecoveryRequired?: (reason: string) => void;
 }
@@ -94,6 +96,7 @@ export class DriveKeyring {
 					vaultId: this.options.vaultId,
 					savedId: this.options.savedFolderId?.(),
 					expectedFingerprint: this.options.savedFingerprint?.(),
+					explicitChoice: this.options.choiceConfirmed?.(),
 					requireExplicitRecovery: true,
 				})).id
 				: await ensureFolder(this.api, this.folderName);
@@ -104,6 +107,9 @@ export class DriveKeyring {
 				}
 			}
 			await this.ensureMeta(folderId);
+			if (this.options.requireExplicitRecovery) {
+				await enrollUnambiguousLegacyFolder(this.api, folderId, this.options.vaultId);
+			}
 			return this.resolvedSealer;
 		})().catch((err: unknown) => {
 			this.pending = null;

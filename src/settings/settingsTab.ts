@@ -1054,6 +1054,7 @@ export class VaultSyncSettingTab extends PluginSettingTab {
 					if (settings.vaultId !== next) {
 						delete settings.driveFolderId;
 						delete settings.driveFolderFingerprint;
+						delete settings.driveFolderChoiceConfirmed;
 					}
 					settings.vaultId = next;
 				}, "settings:vault-id");
@@ -1243,7 +1244,10 @@ export class VaultSyncSettingTab extends PluginSettingTab {
 				// pauses and offers choices rather than silently making a new history.
 				const pasted = expectStringValue(key, value).trim();
 				await this.host.updateSettings((settings) => {
-					if (settings.driveFolderId !== pasted) delete settings.driveFolderFingerprint;
+					if (settings.driveFolderId !== pasted) {
+						delete settings.driveFolderFingerprint;
+						delete settings.driveFolderChoiceConfirmed;
+					}
 					if (pasted) settings.driveFolderId = pasted;
 					else delete settings.driveFolderId;
 				}, "settings:drive-folder-id");

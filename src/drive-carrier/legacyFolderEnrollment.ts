@@ -1,8 +1,19 @@
 import { DriveError, type DriveApi } from "./driveApi";
 import { driveFolderLabel } from "./carrierSettings";
-import { fingerprintForInstallId, FOLDER_IDENTITY_NAME } from "./folderFingerprint";
+import { fingerprintForInstallId, inspectFolderFingerprint, FOLDER_IDENTITY_NAME } from "./folderFingerprint";
 import { META_NAME } from "./fileFormat";
 import { randomId } from "../utils/randomId";
+
+/** Enroll only a single named legacy folder, after the keyring validated its layout/encryption. */
+export async function enrollUnambiguousLegacyFolder(api: DriveApi, folderId: string, vaultId: string): Promise<string | null> {
+	const inspected = await inspectFolderFingerprint(api, folderId);
+	if (inspected.kind !== "identified" || inspected.schema !== 1 ||
+		(inspected.vaultId !== null && inspected.vaultId !== vaultId) ||
+		(inspected.vaultId === vaultId && inspected.fingerprint !== null)) return null;
+	const candidates = await api.findFolders(driveFolderLabel(vaultId));
+	if (candidates.length !== 1 || candidates[0]?.id !== folderId) return null;
+	return enrollLegacyFolder(api, folderId, vaultId);
+}
 
 /**
  * Add an identity marker to one unambiguous legacy main-vault folder. Never

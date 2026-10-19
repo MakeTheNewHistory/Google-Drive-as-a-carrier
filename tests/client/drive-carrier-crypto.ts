@@ -194,6 +194,16 @@ s.section("Strict keyring readiness protects attachment and snapshot access");
 }
 {
 	const drive = new FakeDrive();
+	const api = drive.client();
+	const folder = await api.createFolder(FOLDER);
+	const original = await api.createFile(folder.id, "meta.json", enc.encode(JSON.stringify({ app: "yaos-drive", schema: 1 })));
+	const guarded = new DriveKeyring(api, { vaultId: VAULT, passphrase: "", requireExplicitRecovery: true });
+	await guarded.ready();
+	s.check((await api.listFiles(folder.id)).some((f) => f.name === "folder-identity.json"), "shared keyring enrolls the old folder before blobs/snapshots use it");
+	s.check(dec.decode(await api.readFile(original.id)) === JSON.stringify({ app: "yaos-drive", schema: 1 }), "keyring never rewrites old metadata");
+}
+{
+	const drive = new FakeDrive();
 	const guarded = (): DriveKeyring => new DriveKeyring(drive.client(), {
 		vaultId: VAULT, passphrase: "same", kdfIterations: ITER, requireExplicitRecovery: true,
 	});

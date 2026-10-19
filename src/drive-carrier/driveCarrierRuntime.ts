@@ -33,6 +33,7 @@ export interface DriveCarrierRuntimeDeps {
 	folderIdentity?: {
 		saved(): string | undefined;
 		savedFingerprint?(): string | undefined;
+		choiceConfirmed?(): boolean;
 		remember(id: string, fingerprint?: string): void | Promise<void>;
 	};
 	/**
@@ -144,6 +145,7 @@ export function createDriveCarrier(deps: DriveCarrierRuntimeDeps): DriveCarrier 
 				passphrase: deps.getSettings().driveEncryptionPassphrase ?? "",
 				savedFolderId: deps.folderIdentity?.saved,
 				savedFingerprint: deps.folderIdentity?.savedFingerprint,
+				choiceConfirmed: deps.folderIdentity?.choiceConfirmed,
 				requireExplicitRecovery: !!deps.onFolderRecoveryRequired,
 				onFolderRecoveryRequired: deps.onFolderRecoveryRequired,
 			});

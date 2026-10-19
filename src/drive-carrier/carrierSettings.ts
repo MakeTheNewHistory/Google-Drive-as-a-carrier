@@ -63,6 +63,8 @@ export interface DriveCarrierSettings {
 	driveFolderId?: string;
 	/** SHA-256 fingerprint of this folder's random meta.json installId, bound to driveFolderId. */
 	driveFolderFingerprint?: string;
+	/** True only after the user explicitly chose this folder during recovery. */
+	driveFolderChoiceConfirmed?: boolean;
 }
 
 export function currentCarrier(settings: DriveCarrierSettings): CarrierKind {

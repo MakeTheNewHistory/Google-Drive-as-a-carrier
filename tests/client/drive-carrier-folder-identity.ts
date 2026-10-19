@@ -171,8 +171,12 @@ s.section("Opt-in recovery policy pauses ambiguous histories without touching le
 	try { await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT, requireExplicitRecovery: true }); }
 	catch (err) { ambiguous = err; }
 	s.check(ambiguous instanceof FolderRecoveryRequired, "two initialized histories require a choice");
-	const pinned = await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT, savedId: second.id, requireExplicitRecovery: true });
-	s.check(pinned.id === second.id, "a usable remembered folder still wins");
+	let pinnedWithoutChoice: unknown;
+	try { await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT, savedId: second.id, requireExplicitRecovery: true }); }
+	catch (err) { pinnedWithoutChoice = err; }
+	s.check(pinnedWithoutChoice instanceof FolderRecoveryRequired, "an automatically pinned folder still asks when another initialized history appears");
+	const pinned = await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT, savedId: second.id, explicitChoice: true, requireExplicitRecovery: true });
+	s.check(pinned.id === second.id, "an explicit user choice survives the next reload");
 	const fallback = await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT });
 	s.check(fallback.id === first.id, "legacy callers retain the oldest-folder behavior");
 }
@@ -235,6 +239,15 @@ s.section("One legacy vault folder receives a stable identity without losing met
 	let refused = false;
 	try { await enrollLegacyFolder(api, copy.id, VAULT); } catch { refused = true; }
 	s.check(refused && (await api.listFiles(copy.id)).length === 0, "a duplicate folder cannot be enrolled automatically");
+}
+{
+	const drive = new FakeDrive();
+	const api = drive.client();
+	const folder = await api.createFolder(FOLDER);
+	await api.createFile(folder.id, META_NAME, new TextEncoder().encode(JSON.stringify({ app: "yaos-drive", schema: 1 })));
+	const [left, right] = await Promise.all([enrollLegacyFolder(api, folder.id, VAULT), enrollLegacyFolder(api, folder.id, VAULT)]);
+	s.check(left === right && left.length === 64, "simultaneous legacy enrollment converges on one canonical fingerprint");
+	s.check((await api.listFiles(folder.id)).filter((f) => f.name === META_NAME).length === 1, "a concurrent enrollment never deletes the original meta");
 }
 
 // ---------------------------------------------------------------------------
@@ -427,6 +440,23 @@ s.section("Test 4: a folder that holds a different vault is refused, not merged"
 	s.check(legacy.transport.fatalError === null, "an old meta file without a vault id is not refused");
 	s.check(drive2.namesIn(FOLDER).some((n) => n.startsWith("seg-")), "and the vault syncs normally");
 	legacy.transport.destroy();
+}
+
+// ---------------------------------------------------------------------------
+s.section("Strict transport enrolls a single legacy folder without rewriting its meta");
+{
+	const drive = new FakeDrive();
+	const api = drive.client();
+	const folder = await api.createFolder(FOLDER);
+	const old = await api.createFile(folder.id, META_NAME, new TextEncoder().encode(JSON.stringify({ app: "yaos-drive", schema: 1 })));
+	const rig = makeRig(drive);
+	rig.text.insert(0, "legacy note");
+	const seen = start(rig, "legacy", { onFolderRecoveryRequired: () => undefined });
+	await seen.transport.connect();
+	s.check(seen.transport.fatalError === null && rig.saved.value === folder.id && rig.saved.fingerprint?.length === 64, "legacy folder syncs with a new saved fingerprint");
+	s.check((await api.listFiles(folder.id)).some((f) => f.name === "folder-identity.json"), "a separate marker carries the identity");
+	s.check(new TextDecoder().decode(await api.readFile(old.id)) === JSON.stringify({ app: "yaos-drive", schema: 1 }), "the original metadata stays byte-for-byte unchanged");
+	seen.transport.destroy();
 }
 
 // ---------------------------------------------------------------------------

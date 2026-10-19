@@ -7,6 +7,7 @@ import { DriveError, type DriveApi, type DriveFileInfo } from "./driveApi";
 import { resolveVaultFolder } from "./driveFolders";
 import { inspectFolderFingerprint } from "./folderFingerprint";
 import { FolderRecoveryRequired } from "./folderSelection";
+import { enrollUnambiguousLegacyFolder } from "./legacyFolderEnrollment";
 import { readPendingState, type PendingState } from "./yjsPending";
 import { EncryptionError } from "./driveCrypto";
 import { DriveOperation, DriveOperationStopped } from "./driveOperation";
@@ -130,6 +131,7 @@ export interface DriveTransportOptions {
 		saved(): string | undefined;
 		/** Optional on older hosts. If present, a mismatch halts before sync writes. */
 		savedFingerprint?(): string | undefined;
+		choiceConfirmed?(): boolean;
 		remember(id: string, fingerprint?: string): void | Promise<void>;
 	};
 	/**
@@ -268,7 +270,7 @@ export class DriveTransport extends ObservableV2<TransportEvents> implements Syn
 		onFolderRecoveryRequired: ((reason: string) => void) | undefined;
 		onNotice: ((message: string) => void) | undefined;
 		guardSchema: (() => string | null) | undefined;
-		folderIdentity: { saved(): string | undefined; savedFingerprint?(): string | undefined; remember(id: string, fingerprint?: string): void | Promise<void> } | undefined;
+		folderIdentity: { saved(): string | undefined; savedFingerprint?(): string | undefined; choiceConfirmed?(): boolean; remember(id: string, fingerprint?: string): void | Promise<void> } | undefined;
 		folderName: string;
 		ignoreOrigin: (origin: unknown) => boolean;
 		log: (message: string) => void;
@@ -835,6 +837,7 @@ export class DriveTransport extends ObservableV2<TransportEvents> implements Syn
 			savedId: savedFolderId,
 			requireExplicitRecovery: !!this.opts.onFolderRecoveryRequired,
 			expectedFingerprint: this.opts.folderIdentity?.savedFingerprint?.(),
+			explicitChoice: this.opts.folderIdentity?.choiceConfirmed?.(),
 		}));
 		op.check();
 		if (!resolution.id) throw new DriveError(500, "Could not create the vault folder");
@@ -863,6 +866,12 @@ export class DriveTransport extends ObservableV2<TransportEvents> implements Syn
 		op.check();
 		if (!this.keyring.isReady) throw new DriveError(500, "The vault key is not ready");
 		if (this.opts.folderIdentity) {
+			// Only the production recovery-aware path enrolls a single legacy
+			// folder. The original meta.json (including its encryption) is untouched.
+			if (this.opts.onFolderRecoveryRequired) {
+				await op.wait(() => enrollUnambiguousLegacyFolder(this.api, resolution.id, this.opts.vaultId));
+				op.check();
+			}
 			const verified = await op.wait(() => inspectFolderFingerprint(this.api, resolution.id));
 			op.check();
 			if (expectedFingerprint && (verified.kind !== "identified" || verified.fingerprint !== expectedFingerprint)) {

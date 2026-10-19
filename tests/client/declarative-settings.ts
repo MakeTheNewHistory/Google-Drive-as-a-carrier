@@ -125,15 +125,17 @@ s.section("Drive folder binding follows explicit settings changes");
 	settings.vaultId = "vault-a";
 	settings.driveFolderId = "folder-a";
 	settings.driveFolderFingerprint = "fingerprint-a";
+	settings.driveFolderChoiceConfirmed = true;
 	await tab.setControlValue("vaultId", "vault-a");
 	s.check(settings.driveFolderId === "folder-a" && settings.driveFolderFingerprint === "fingerprint-a", "unchanged vault keeps its folder binding");
 	await tab.setControlValue("driveFolderId", "folder-a");
 	s.check(settings.driveFolderFingerprint === "fingerprint-a", "re-entering the same folder keeps its binding");
 	await tab.setControlValue("driveFolderId", "folder-b");
-	s.check(settings.driveFolderId === "folder-b" && settings.driveFolderFingerprint === undefined, "choosing another folder invalidates the old fingerprint");
+	s.check(settings.driveFolderId === "folder-b" && settings.driveFolderFingerprint === undefined && settings.driveFolderChoiceConfirmed === undefined, "choosing another folder invalidates the old binding and explicit choice");
 	settings.driveFolderFingerprint = "fingerprint-b";
+	settings.driveFolderChoiceConfirmed = true;
 	await tab.setControlValue("vaultId", "vault-b");
-	s.check(settings.driveFolderId === undefined && settings.driveFolderFingerprint === undefined, "changing vault clears both folder binding fields");
+	s.check(settings.driveFolderId === undefined && settings.driveFolderFingerprint === undefined && settings.driveFolderChoiceConfirmed === undefined, "changing vault clears the folder binding and explicit choice");
 }
 
 s.section("Control persistence and side effects");
