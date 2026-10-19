@@ -204,6 +204,20 @@ s.section("Strict keyring readiness protects attachment and snapshot access");
 }
 {
 	const drive = new FakeDrive();
+	const api = drive.client();
+	const folder = await api.createFolder(FOLDER);
+	const encryption = (await createEncryption("old secret", VAULT, ITER)).meta;
+	const old = await api.createFile(folder.id, "meta.json", enc.encode(JSON.stringify({ app: "yaos-drive", schema: 1, encryption })));
+	const wrong = new DriveKeyring(api, { vaultId: VAULT, passphrase: "wrong", requireExplicitRecovery: true });
+	s.check((await fails(() => wrong.ready())) instanceof FatalCarrierError, "incorrect legacy encryption passphrase is refused before enrollment");
+	s.check((await api.listFiles(folder.id)).length === 1, "wrong passphrase creates no identity marker");
+	const correct = new DriveKeyring(api, { vaultId: VAULT, passphrase: "old secret", requireExplicitRecovery: true });
+	const sealer = await correct.ready();
+	s.check(sealer !== null && (await api.listFiles(folder.id)).some((f) => f.name === "folder-identity.json"), "correct passphrase preserves encrypted legacy vault and enrolls marker");
+	s.check(dec.decode(await api.readFile(old.id)) === JSON.stringify({ app: "yaos-drive", schema: 1, encryption }), "encrypted metadata remains byte-for-byte unchanged");
+}
+{
+	const drive = new FakeDrive();
 	const guarded = (): DriveKeyring => new DriveKeyring(drive.client(), {
 		vaultId: VAULT, passphrase: "same", kdfIterations: ITER, requireExplicitRecovery: true,
 	});
