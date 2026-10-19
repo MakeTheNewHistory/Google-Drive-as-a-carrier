@@ -1,7 +1,7 @@
 import { DriveError, FOLDER_MIME, type DriveApi, type DriveFileInfo, type DriveFolderInfo } from "./driveApi";
 import { META_NAME } from "./fileFormat";
 import { inspectFolderFingerprint } from "./folderFingerprint";
-import { selectVerifiedFolder } from "./folderSelection";
+import { FolderRecoveryRequired, selectVerifiedFolder } from "./folderSelection";
 
 /**
  * Find the folder with this name, or create it. When two devices create it at
@@ -129,6 +129,8 @@ export interface ResolveVaultFolderOptions {
 	vaultId: string;
 	/** The folder this device used before, when it has one saved (F5). */
 	savedId?: string;
+	/** Only enable when a recovery-choice UI is available. Default preserves legacy fallback. */
+	requireExplicitRecovery?: boolean;
 }
 
 /**
@@ -157,10 +159,29 @@ export async function resolveVaultFolder(api: DriveApi, opts: ResolveVaultFolder
 				warning: await describeOthers(api, savedId, others, opts.name, opts.vaultId),
 			};
 		}
+		if (opts.requireExplicitRecovery) {
+			throw new FolderRecoveryRequired("The remembered Drive folder is missing, trashed, or inaccessible with this Google sign-in. Choose a verified folder or explicitly start a new Drive history; nothing was written.");
+		}
 	}
 	const rememberedGone = savedId !== "";
 	const goneSentence = `The Drive folder this device remembered is gone (removed or trashed), so it was looked up by name again.`;
 	const goneAndCreatedSentence = `The Drive folder this device remembered is gone (removed or trashed), and no folder named "${opts.name}" was found, so a new one was made. Nothing on Drive was deleted.`;
+	if (opts.requireExplicitRecovery && candidates.length > 0) {
+		const inspections = await Promise.all(candidates.map(async (folder) => ({
+			folder,
+			identity: await inspectFolderFingerprint(api, folder.id),
+		})));
+		const matches = inspections.filter(({ identity }) => identity.kind === "identified" && identity.vaultId === opts.vaultId);
+		const allEmpty = inspections.every(({ identity }) => identity.kind === "empty");
+		const verifiedOther = inspections.every(({ folder, identity }) =>
+			folder.id === matches[0]?.folder.id || (identity.kind === "identified" && !!identity.vaultId && identity.vaultId !== opts.vaultId));
+		// Keep the existing deterministic first-setup race for empty folders.
+		// A single legacy folder continues to the keyring's authoritative check.
+		if (!allEmpty && !(matches.length === 1 && verifiedOther) &&
+			!(inspections.length === 1 && inspections[0]?.identity.kind === "identified" && inspections[0].identity.vaultId === null && inspections[0].identity.schema === 1)) {
+			throw new FolderRecoveryRequired("The visible Drive folders cannot be identified as one unambiguous history for this vault. Choose a verified folder or explicitly start a new Drive history; nothing was written.");
+		}
+	}
 	if (candidates.length === 0) {
 		const created = await api.createFolder(opts.name);
 		// Two devices may have created the folder at the same moment: list once

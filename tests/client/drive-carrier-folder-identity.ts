@@ -21,7 +21,8 @@ import * as Y from "yjs";
 import { DriveTransport, type DriveTransportOptions } from "../../src/drive-carrier/driveTransport";
 import { META_NAME } from "../../src/drive-carrier/fileFormat";
 import { fingerprintForInstallId, inspectFolderFingerprint } from "../../src/drive-carrier/folderFingerprint";
-import { selectVerifiedFolder } from "../../src/drive-carrier/folderSelection";
+import { FolderRecoveryRequired, selectVerifiedFolder } from "../../src/drive-carrier/folderSelection";
+import { resolveVaultFolder } from "../../src/drive-carrier/driveFolders";
 import { FakeDrive } from "../mocks/fakeDrive";
 import { suite } from "../harness.ts";
 
@@ -142,6 +143,31 @@ s.section("Legacy, empty and unavailable folders remain separate recovery cases"
 	const other = await api.createFolder(FOLDER);
 	const ambiguous = await selectVerifiedFolder(api, FOLDER, VAULT);
 	s.check(ambiguous.kind === "needs-choice" && ambiguous.folderIds.includes(other.id), "legacy and empty duplicates need an explicit recovery choice");
+}
+
+// ---------------------------------------------------------------------------
+s.section("Opt-in recovery policy pauses ambiguous histories without touching legacy callers");
+{
+	const drive = new FakeDrive();
+	const api = drive.client();
+	const gone = await api.createFolder(FOLDER);
+	drive.trashFolder(FOLDER);
+	let missing: unknown;
+	try { await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT, savedId: gone.id, requireExplicitRecovery: true }); }
+	catch (err) { missing = err; }
+	s.check(missing instanceof FolderRecoveryRequired && drive.calls.createFolder === 1, "missing remembered folder pauses before creating another");
+	const first = await api.createFolder(FOLDER);
+	const second = await api.createFolder(FOLDER);
+	await api.createFile(first.id, META_NAME, new TextEncoder().encode(JSON.stringify({ schema: 1, vaultId: VAULT, installId: "one" })));
+	await api.createFile(second.id, META_NAME, new TextEncoder().encode(JSON.stringify({ schema: 1, vaultId: VAULT, installId: "two" })));
+	let ambiguous: unknown;
+	try { await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT, requireExplicitRecovery: true }); }
+	catch (err) { ambiguous = err; }
+	s.check(ambiguous instanceof FolderRecoveryRequired, "two initialized histories require a choice");
+	const pinned = await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT, savedId: second.id, requireExplicitRecovery: true });
+	s.check(pinned.id === second.id, "a usable remembered folder still wins");
+	const fallback = await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT });
+	s.check(fallback.id === first.id, "legacy callers retain the oldest-folder behavior");
 }
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,14 @@ import { inspectFolderFingerprint, type FolderFingerprintInspection } from "./fo
 
 type Identified = Extract<FolderFingerprintInspection, { kind: "identified" }>;
 
+/** A folder choice requires user action; retrying an unchanged setup is unsafe. */
+export class FolderRecoveryRequired extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "FolderRecoveryRequired";
+	}
+}
+
 /** Read-only candidate decision. Callers must not turn ambiguity into a new folder. */
 export type FolderDecision =
 	| { kind: "selected"; folder: DriveFolderInfo; inspection: Identified }
