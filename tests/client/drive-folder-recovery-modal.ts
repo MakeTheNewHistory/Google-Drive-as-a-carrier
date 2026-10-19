@@ -35,7 +35,11 @@ Object.defineProperty(Modal.prototype, "open", { configurable: true, value: func
 	this.onOpen();
 } });
 Object.defineProperty(Modal.prototype, "close", { configurable: true, value: function (this: Modal) { this.onClose(); } });
-const ui = (modal: Modal): FakeElement => modal.contentEl as unknown as FakeElement;
+const ui = (modal: Modal): FakeElement => {
+	const element: unknown = modal.contentEl;
+	if (!(element instanceof FakeElement)) throw new Error("The test modal has no fake content element");
+	return element;
+};
 const tick = async (): Promise<void> => { await new Promise((resolve) => setTimeout(resolve, 0)); };
 
 s.section("Recovery modal requires a folder ID and validates selection");

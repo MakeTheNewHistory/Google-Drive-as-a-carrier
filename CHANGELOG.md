@@ -8,6 +8,16 @@ Up to `2.1.1-drive.10` the version number (like `2.1.1-drive.3`) existed only in
 
 This file is specific to this fork. It is not part of upstream YAOS.
 
+## 2.1.25 - 2026-10-19 - TEST PRE-RELEASE: COD-10 Drive vault-folder recovery
+
+This pre-release is for **scratch-vault testing** before COD-10 is marked Done. Google Drive remains experimental and off by default. Cloudflare and LAN carriers, CRDT schema, and Drive encryption format are unchanged. Back up local vaults and Drive folders before testing; never delete duplicate folders to silence a warning.
+
+- The main `YAOS <vaultId>` folder has a stable per-folder fingerprint, saved with its Drive folder ID. If an older same-name folder belongs to a different vault, YAOS chooses the uniquely verified match instead of the oldest wrong folder. The setup wizard uses the same verified choice.
+- Missing, inaccessible, wrong-vault or ambiguous initialized main folders pause sync instead of silently starting or merging a history. Recovery offers a verified folder ID, a separately confirmed **new history** (other devices do not follow automatically), or cancel. An explicit choice persists across reload.
+- An unambiguous legacy main folder gains a separate `folder-identity.json` marker. Its original `meta.json` and encryption parameters are not rewritten or deleted. The shared keyring uses the same main-folder safeguard before attachment/snapshot access.
+- The main folder is the scope of COD-10; separate blob and snapshot folder identities are a future follow-up. `drive.file` still cannot reveal a folder made under an inaccessible Google OAuth client.
+- Automated gates: production and QA builds, test/QA typechecks, production-bundle guard, and 143 regression suites passed. **Real Obsidian and Google Drive have not been tested here.** Review on a scratch vault using `docs/COD-10-review-checklist.md` and report results in COD-10 before marking Done.
+
 ## 2.1.24 - 2026-10-17 - TEST RELEASE: a warning before switching carriers, and a setup guide that knows when it is done
 
 This release changes two things on the YAOS settings screen. The Cloudflare carrier and the server are unchanged, the Google Drive carrier is still **experimental and off by default**, and no vault, CRDT or encryption format changed. No settings migration is required and no new setting is introduced.
