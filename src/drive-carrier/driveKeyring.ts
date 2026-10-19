@@ -1,6 +1,8 @@
 import { DriveError, type DriveApi, type DriveFileInfo } from "./driveApi";
 import { randomId } from "../utils/randomId";
-import { ensureFolder, oldestFirst } from "./driveFolders";
+import { ensureFolder, oldestFirst, resolveVaultFolder } from "./driveFolders";
+import { inspectFolderFingerprint } from "./folderFingerprint";
+import { FolderRecoveryRequired } from "./folderSelection";
 import {
 	DEFAULT_KDF_ITERATIONS,
 	EncryptionError,
@@ -38,6 +40,11 @@ export interface DriveKeyringOptions {
 	folderName?: string;
 	/** Only used when this device creates the vault folder. */
 	kdfIterations?: number;
+	/** Shared with the transport so attachments/snapshots cannot adopt another folder first. */
+	savedFolderId?: () => string | undefined;
+	savedFingerprint?: () => string | undefined;
+	requireExplicitRecovery?: boolean;
+	onFolderRecoveryRequired?: (reason: string) => void;
 }
 
 /**
@@ -80,15 +87,29 @@ export class DriveKeyring {
 
 	/** For stores that may run before the sync transport: find or create the vault folder, then check it. */
 	ready(): Promise<DriveSealer | null> {
-		this.pending ??= ensureFolder(this.api, this.folderName)
-			.then((folderId) => this.ensureMeta(folderId))
-			.then(
-				() => this.resolvedSealer,
-				(err: unknown) => {
-					this.pending = null;
-					throw err;
-				},
-			);
+		this.pending ??= (async () => {
+			const folderId = this.options.requireExplicitRecovery
+				? (await resolveVaultFolder(this.api, {
+					name: this.folderName,
+					vaultId: this.options.vaultId,
+					savedId: this.options.savedFolderId?.(),
+					expectedFingerprint: this.options.savedFingerprint?.(),
+					requireExplicitRecovery: true,
+				})).id
+				: await ensureFolder(this.api, this.folderName);
+			if (this.options.requireExplicitRecovery && this.options.savedFingerprint?.()) {
+				const identity = await inspectFolderFingerprint(this.api, folderId);
+				if (identity.kind !== "identified" || identity.vaultId !== this.options.vaultId || identity.fingerprint !== this.options.savedFingerprint?.()) {
+					throw new FolderRecoveryRequired("The remembered Drive folder's fingerprint has changed. Sync is paused; choose a verified folder before attachments or snapshots are used.");
+				}
+			}
+			await this.ensureMeta(folderId);
+			return this.resolvedSealer;
+		})().catch((err: unknown) => {
+			this.pending = null;
+			if (err instanceof FolderRecoveryRequired) this.options.onFolderRecoveryRequired?.(err.message);
+			throw err;
+		});
 		return this.pending;
 	}
 

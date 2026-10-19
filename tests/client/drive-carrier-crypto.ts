@@ -14,6 +14,7 @@ import {
 } from "../../src/drive-carrier/driveCrypto";
 import { DriveKeyring, FatalCarrierError } from "../../src/drive-carrier/driveKeyring";
 import { sha256Hex } from "../../src/drive-carrier/driveFolders";
+import { FolderRecoveryRequired } from "../../src/drive-carrier/folderSelection";
 import { DriveSnapshotBackend, snapshotFolderName } from "../../src/drive-carrier/driveSnapshotBackend";
 import { DriveTransport } from "../../src/drive-carrier/driveTransport";
 import { KIND_SEGMENT, classifyName, encodeFile } from "../../src/drive-carrier/fileFormat";
@@ -168,6 +169,37 @@ s.section("Test 3: the keyring decides per vault");
 	s.check(metas.length === 1, "one meta file remains");
 	const sealed = await sa?.seal(enc.encode("x"), "segment");
 	s.check(sealed !== undefined && dec.decode(await (sb?.open(sealed, "segment") ?? Promise.reject(new Error("no sealer")))) === "x", "both devices ended up with the same key");
+}
+
+s.section("Strict keyring readiness protects attachment and snapshot access");
+{
+	const drive = new FakeDrive();
+	const recovery: string[] = [];
+	const guarded = new DriveKeyring(drive.client(), {
+		vaultId: VAULT, passphrase: "", savedFolderId: () => "missing-id",
+		requireExplicitRecovery: true, onFolderRecoveryRequired: (reason) => recovery.push(reason),
+	});
+	const failure = await fails(() => guarded.ready());
+	s.check(failure instanceof FolderRecoveryRequired && recovery.length === 1, "an unavailable pinned folder pauses before keyring creates another");
+	s.check(drive.calls.createFolder === 0, "no new remote folder was created by readiness");
+	const original = await drive.client().createFolder(FOLDER);
+	await drive.client().createFile(original.id, "meta.json", enc.encode(JSON.stringify({ schema: 1, vaultId: VAULT, installId: "original" })));
+	const wrongFingerprint = new DriveKeyring(drive.client(), {
+		vaultId: VAULT, passphrase: "", savedFolderId: () => original.id,
+		savedFingerprint: () => "0".repeat(64), requireExplicitRecovery: true,
+	});
+	const before = drive.calls.createFile;
+	s.check((await fails(() => wrongFingerprint.ready())) instanceof FolderRecoveryRequired, "fingerprint mismatch blocks the shared keyring");
+	s.check(drive.calls.createFile === before, "fingerprint mismatch never writes metadata");
+}
+{
+	const drive = new FakeDrive();
+	const guarded = (): DriveKeyring => new DriveKeyring(drive.client(), {
+		vaultId: VAULT, passphrase: "same", kdfIterations: ITER, requireExplicitRecovery: true,
+	});
+	const [a, b] = await Promise.all([guarded().ready(), guarded().ready()]);
+	const payload = await a?.seal(enc.encode("same history"), "segment");
+	s.check(payload !== undefined && dec.decode(await (b?.open(payload, "segment") ?? Promise.reject(new Error("no key")))) === "same history", "simultaneous empty-folder creation still converges under strict recovery");
 }
 
 // ---------------------------------------------------------------------------

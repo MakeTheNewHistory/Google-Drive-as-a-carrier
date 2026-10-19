@@ -142,6 +142,10 @@ export function createDriveCarrier(deps: DriveCarrierRuntimeDeps): DriveCarrier 
 			keyring = new DriveKeyring(getApi(), {
 				vaultId,
 				passphrase: deps.getSettings().driveEncryptionPassphrase ?? "",
+				savedFolderId: deps.folderIdentity?.saved,
+				savedFingerprint: deps.folderIdentity?.savedFingerprint,
+				requireExplicitRecovery: !!deps.onFolderRecoveryRequired,
+				onFolderRecoveryRequired: deps.onFolderRecoveryRequired,
 			});
 			keyrings.set(vaultId, keyring);
 		}
