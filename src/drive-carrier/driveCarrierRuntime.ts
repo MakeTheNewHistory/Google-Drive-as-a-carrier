@@ -5,6 +5,7 @@ import type { SyncTransportFactory } from "../sync/transport";
 import { DriveBlobStore, type AttachmentAudit } from "./driveBlobStore";
 import { DriveSnapshotBackend } from "./driveSnapshotBackend";
 import { DriveKeyring } from "./driveKeyring";
+import { verifyRecoveryFolder, createRecoveryFolder } from "./folderRecovery";
 import { DEFAULT_COMPACTION_MODE, DriveTransport } from "./driveTransport";
 import { MeteredDriveApi, type RequestStats } from "./requestMeter";
 import { browserActivity, type ActivitySource } from "./activity";
@@ -24,6 +25,8 @@ export interface DriveCarrierRuntimeDeps {
 	pollIntervalMs?: number;
 	/** Called once when the carrier stops for a reason retrying cannot fix (wrong passphrase, another layout). */
 	onFatal?: (message: string) => void;
+	/** Opts into pausing unsafe folder fallback and opens the recovery choices. */
+	onFolderRecoveryRequired?: (reason: string) => void;
 	/** Something worth telling the user that is not an error (a duplicate or empty vault folder, F5). */
 	onNotice?: (message: string) => void;
 	/** F5: the folder id this device used last time, and where a resolved one is saved. */
@@ -72,6 +75,10 @@ export interface DriveCarrier {
 	snapshotBackend(vaultId: string, getDoc: () => Y.Doc | null): SnapshotBackend;
 	/** How many requests the carrier has sent to Drive (null before the first one). */
 	requestStats(): RequestStats | null;
+	/** Validate a user-selected folder without writing to Drive. */
+	verifyRecoveryFolder(vaultId: string, folderId: string): Promise<string>;
+	/** A new history is created only after a second explicit confirmation. */
+	createRecoveryFolder(vaultId: string): Promise<string>;
 	/** Re-read the "sync speed" setting and apply it to the running transports. */
 	applyPace(): void;
 	/** F6: list the attachments on Drive and say which nothing references. Never deletes. */
@@ -174,6 +181,7 @@ export function createDriveCarrier(deps: DriveCarrierRuntimeDeps): DriveCarrier 
 				verifyBeforePrune: deps.getSettings().driveVerifyBeforePrune !== false,
 				compaction: deps.getSettings().driveCompaction === "legacy" ? "legacy" : DEFAULT_COMPACTION_MODE,
 				onFatal: deps.onFatal,
+				onFolderRecoveryRequired: deps.onFolderRecoveryRequired,
 				onNotice: deps.onNotice,
 				folderIdentity: deps.folderIdentity,
 				guardSchema: deps.guardSchema,
@@ -196,6 +204,8 @@ export function createDriveCarrier(deps: DriveCarrierRuntimeDeps): DriveCarrier 
 			return await blobStoreFor(vaultId).audit(referencedHashes);
 		},
 		requestStats: () => api?.stats() ?? null,
+		verifyRecoveryFolder: (vaultId, folderId) => verifyRecoveryFolder(getApi(), vaultId, folderId),
+		createRecoveryFolder: (vaultId) => createRecoveryFolder(getApi(), vaultId),
 		applyPace() {
 			const pace = currentPace();
 			for (const transport of transports.values()) {

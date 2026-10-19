@@ -23,6 +23,7 @@ import { META_NAME } from "../../src/drive-carrier/fileFormat";
 import { fingerprintForInstallId, inspectFolderFingerprint } from "../../src/drive-carrier/folderFingerprint";
 import { FolderRecoveryRequired, selectVerifiedFolder } from "../../src/drive-carrier/folderSelection";
 import { resolveVaultFolder } from "../../src/drive-carrier/driveFolders";
+import { createRecoveryFolder, verifyRecoveryFolder } from "../../src/drive-carrier/folderRecovery";
 import { FakeDrive } from "../mocks/fakeDrive";
 import { suite } from "../harness.ts";
 
@@ -156,6 +157,11 @@ s.section("Opt-in recovery policy pauses ambiguous histories without touching le
 	try { await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT, savedId: gone.id, requireExplicitRecovery: true }); }
 	catch (err) { missing = err; }
 	s.check(missing instanceof FolderRecoveryRequired && drive.calls.createFolder === 1, "missing remembered folder pauses before creating another");
+	drive.failNext("getFile", 403, 1);
+	let denied: unknown;
+	try { await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT, savedId: gone.id, requireExplicitRecovery: true }); }
+	catch (err) { denied = err; }
+	s.check(denied instanceof FolderRecoveryRequired, "a permission refusal offers recovery rather than retrying forever");
 	const first = await api.createFolder(FOLDER);
 	const second = await api.createFolder(FOLDER);
 	await api.createFile(first.id, META_NAME, new TextEncoder().encode(JSON.stringify({ schema: 1, vaultId: VAULT, installId: "one" })));
@@ -168,6 +174,43 @@ s.section("Opt-in recovery policy pauses ambiguous histories without touching le
 	s.check(pinned.id === second.id, "a usable remembered folder still wins");
 	const fallback = await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT });
 	s.check(fallback.id === first.id, "legacy callers retain the oldest-folder behavior");
+}
+
+// ---------------------------------------------------------------------------
+s.section("The opt-in transport stops and requests recovery before a new history is made");
+{
+	const drive = new FakeDrive();
+	const rig = makeRig(drive, "missing-folder-id");
+	const reasons: string[] = [];
+	const seen = start(rig, "paused", { onFolderRecoveryRequired: (reason) => reasons.push(reason) });
+	await seen.transport.connect();
+	s.check(seen.transport.fatalError !== null && reasons.length === 1, "recovery is requested once and the carrier stops");
+	s.check(drive.calls.createFolder === 0 && rig.saved.value === "missing-folder-id", "no folder or binding was created without a choice");
+	seen.transport.destroy();
+}
+
+// ---------------------------------------------------------------------------
+s.section("Recovery choices validate a folder before changing settings");
+{
+	const drive = new FakeDrive();
+	const api = drive.client();
+	const wrong = await api.createFolder(FOLDER);
+	await api.createFile(wrong.id, META_NAME, new TextEncoder().encode(JSON.stringify({ schema: 1, vaultId: "not-ours", installId: "wrong" })));
+	const right = await api.createFolder(FOLDER);
+	await api.createFile(right.id, META_NAME, new TextEncoder().encode(JSON.stringify({ schema: 1, vaultId: VAULT, installId: "right" })));
+	let rejected = false;
+	try { await verifyRecoveryFolder(api, VAULT, wrong.id); } catch { rejected = true; }
+	s.check(rejected, "wrong-vault folder ID is rejected without modifying Drive");
+	const fingerprint = await verifyRecoveryFolder(api, VAULT, right.id);
+	s.check(fingerprint === await fingerprintForInstallId("right"), "a verified choice returns the expected fingerprint");
+	const before = drive.calls.createFolder;
+	const fresh = await createRecoveryFolder(api, VAULT);
+	s.check(drive.calls.createFolder === before + 1 && drive.folderById(fresh)?.name === FOLDER, "explicit new history creates one folder");
+	s.check((await api.listFiles(fresh)).length === 0, "new history has no writes before reload");
+	let refused: unknown;
+	try { await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT, savedId: wrong.id, requireExplicitRecovery: true }); }
+	catch (err) { refused = err; }
+	s.check(refused instanceof FolderRecoveryRequired, "remembered wrong-vault folder requests recovery before metadata changes");
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import { makeSvEchoMessage } from "../sync/svEchoMessage";
 import { DriveError, type DriveApi, type DriveFileInfo } from "./driveApi";
 import { resolveVaultFolder } from "./driveFolders";
 import { inspectFolderFingerprint } from "./folderFingerprint";
+import { FolderRecoveryRequired } from "./folderSelection";
 import { readPendingState, type PendingState } from "./yjsPending";
 import { EncryptionError } from "./driveCrypto";
 import { DriveOperation, DriveOperationStopped } from "./driveOperation";
@@ -52,6 +53,8 @@ export interface DriveTransportOptions {
 	keyring?: DriveKeyring;
 	/** Called once when the carrier stops for a reason retrying cannot fix. */
 	onFatal?: (message: string) => void;
+	/** When provided, unsafe folder fallbacks pause and offer explicit recovery. */
+	onFolderRecoveryRequired?: (reason: string) => void;
 	/** Local edits are batched for this long before one segment is uploaded. */
 	batchMs?: number;
 	/** Compact when this many segment files exist... */
@@ -257,11 +260,12 @@ export class DriveTransport extends ObservableV2<TransportEvents> implements Syn
 	/** Last error seen, for diagnostics. */
 	lastError: string | null = null;
 
-	private readonly opts: Required<Omit<DriveTransportOptions, "ignoreOrigin" | "log" | "folderName" | "idleAfterMs" | "idlePollIntervalMs" | "backgroundPollIntervalMs" | "activity" | "keyring" | "onFatal" | "guardSchema" | "folderIdentity" | "onNotice">> & {
+	private readonly opts: Required<Omit<DriveTransportOptions, "ignoreOrigin" | "log" | "folderName" | "idleAfterMs" | "idlePollIntervalMs" | "backgroundPollIntervalMs" | "activity" | "keyring" | "onFatal" | "onFolderRecoveryRequired" | "guardSchema" | "folderIdentity" | "onNotice">> & {
 		idleAfterMs: number | undefined;
 		idlePollIntervalMs: number | undefined;
 		backgroundPollIntervalMs: number | undefined;
 		onFatal: ((message: string) => void) | undefined;
+		onFolderRecoveryRequired: ((reason: string) => void) | undefined;
 		onNotice: ((message: string) => void) | undefined;
 		guardSchema: (() => string | null) | undefined;
 		folderIdentity: { saved(): string | undefined; savedFingerprint?(): string | undefined; remember(id: string, fingerprint?: string): void | Promise<void> } | undefined;
@@ -335,6 +339,7 @@ export class DriveTransport extends ObservableV2<TransportEvents> implements Syn
 			idlePollIntervalMs: options.idlePollIntervalMs,
 			backgroundPollIntervalMs: options.backgroundPollIntervalMs,
 			onFatal: options.onFatal,
+			onFolderRecoveryRequired: options.onFolderRecoveryRequired,
 			onNotice: options.onNotice,
 			guardSchema: options.guardSchema,
 			folderIdentity: options.folderIdentity,
@@ -644,6 +649,11 @@ export class DriveTransport extends ObservableV2<TransportEvents> implements Syn
 		const message = err instanceof Error ? err.message : String(err);
 		this.lastError = message;
 		this.opts.log(`drive carrier: ${message}`);
+		if (err instanceof FolderRecoveryRequired) {
+			this.failHard(message);
+			this.opts.onFolderRecoveryRequired?.(message);
+			return;
+		}
 		if (err instanceof FatalCarrierError) {
 			this.failHard(message);
 			return;
@@ -823,6 +833,8 @@ export class DriveTransport extends ObservableV2<TransportEvents> implements Syn
 			name: this.opts.folderName,
 			vaultId: this.opts.vaultId,
 			savedId: savedFolderId,
+			requireExplicitRecovery: !!this.opts.onFolderRecoveryRequired,
+			expectedFingerprint: this.opts.folderIdentity?.savedFingerprint?.(),
 		}));
 		op.check();
 		if (!resolution.id) throw new DriveError(500, "Could not create the vault folder");
@@ -831,15 +843,17 @@ export class DriveTransport extends ObservableV2<TransportEvents> implements Syn
 		// behind (the choice already converged on the oldest one). That used to be
 		// silent; it is not worth a Notice, but it is worth a line in the log.
 		else if (resolution.folders > 1) this.opts.log(`drive carrier: ${String(resolution.folders)} folders are named "${this.opts.folderName}"; using the oldest one`);
-		// Preserve the existing removed-folder fallback until the recovery-choice UI
-		// can ask before changing histories. A binding only verifies the same ID.
+		// A saved fingerprint is bound to its folder ID; a deliberate recovery
+		// selection starts a new binding after that folder is validated.
 		const expectedFingerprint = savedFolderId === resolution.id ? this.opts.folderIdentity?.savedFingerprint?.() : undefined;
 		if (expectedFingerprint) {
 			// Check the saved binding before ensureMeta can create a new metadata file.
 			const before = await op.wait(() => inspectFolderFingerprint(this.api, resolution.id));
 			op.check();
 			if (before.kind !== "identified" || before.vaultId !== this.opts.vaultId || before.fingerprint !== expectedFingerprint) {
-				throw new FatalCarrierError("The Drive folder's fingerprint does not match the one this device remembers. Sync stopped without writing. Check the Google Drive folder ID and sign-in in YAOS settings.");
+				const message = "The Drive folder's fingerprint does not match the one this device remembers. Sync stopped without writing.";
+				if (this.opts.onFolderRecoveryRequired) throw new FolderRecoveryRequired(message);
+				throw new FatalCarrierError(message);
 			}
 		}
 		// The folder counts as ready only once the keyring knows whether the vault is
@@ -852,7 +866,9 @@ export class DriveTransport extends ObservableV2<TransportEvents> implements Syn
 			const verified = await op.wait(() => inspectFolderFingerprint(this.api, resolution.id));
 			op.check();
 			if (expectedFingerprint && (verified.kind !== "identified" || verified.fingerprint !== expectedFingerprint)) {
-				throw new FatalCarrierError("The Drive folder's fingerprint changed during setup. Sync stopped without writing.");
+				const message = "The Drive folder's fingerprint changed during setup. Sync stopped without writing.";
+				if (this.opts.onFolderRecoveryRequired) throw new FolderRecoveryRequired(message);
+				throw new FatalCarrierError(message);
 			}
 			const fingerprint = verified.kind === "identified" && verified.vaultId === this.opts.vaultId ? verified.fingerprint ?? undefined : undefined;
 			await op.wait(async () => { await this.opts.folderIdentity?.remember(resolution.id, fingerprint); });

@@ -131,6 +131,8 @@ export interface ResolveVaultFolderOptions {
 	savedId?: string;
 	/** Only enable when a recovery-choice UI is available. Default preserves legacy fallback. */
 	requireExplicitRecovery?: boolean;
+	/** Only meaningful with a saved ID; prevents a copied or replaced folder from being adopted. */
+	expectedFingerprint?: string;
 }
 
 /**
@@ -139,18 +141,33 @@ export interface ResolveVaultFolderOptions {
  * renamed in the Drive web app is simply used again instead of a second empty
  * folder being created and the whole vault being uploaded into it.
  *
- * The choice among folders that share the name is unchanged (oldest, then
- * lowest id), including the case where two devices create the folder at the
- * same moment: after creating, the name is listed again and everyone picks the
- * same oldest folder. Duplicates are reported, never deleted; a saved id that
- * is gone, trashed or not a folder is reported and falls back to the name search.
+ * Concurrent creation of empty folders still converges on the oldest (then
+ * lowest id). A verified vault can beat an older wrong-vault folder. Duplicates
+ * are reported, never deleted. With explicit recovery enabled, an unavailable
+ * saved id or ambiguous initialized histories pause instead of guessing; old
+ * callers without that option retain the original name-search fallback.
  */
 export async function resolveVaultFolder(api: DriveApi, opts: ResolveVaultFolderOptions): Promise<VaultFolderResolution> {
 	const candidates = oldestFolderFirst(await api.findFolders(opts.name));
 	const savedId = opts.savedId?.trim() ?? "";
 	if (savedId) {
-		const usable = await isUsableFolder(api, savedId);
+		let usable: boolean;
+		try { usable = await isUsableFolder(api, savedId); }
+		catch (err) {
+			if (opts.requireExplicitRecovery && err instanceof DriveError && err.status === 403) {
+				throw new FolderRecoveryRequired("Google Drive refused access to the remembered folder. Sync paused; check this sign-in and choose a verified folder if needed.");
+			}
+			throw err;
+		}
 		if (usable) {
+			if (opts.requireExplicitRecovery) {
+				const identity = await inspectFolderFingerprint(api, savedId);
+				if (identity.kind === "identified" &&
+					((identity.vaultId !== null && identity.vaultId !== opts.vaultId) ||
+						(opts.expectedFingerprint && identity.fingerprint !== opts.expectedFingerprint))) {
+					throw new FolderRecoveryRequired("The remembered Drive folder does not match this vault's identity. Sync stopped without writing; choose a verified folder or start a new Drive history.");
+				}
+			}
 			const others = candidates.filter((f) => f.id !== savedId);
 			return {
 				id: savedId,

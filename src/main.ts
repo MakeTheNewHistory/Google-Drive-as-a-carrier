@@ -106,6 +106,7 @@ import {
 	newDriveDeviceId,
 } from "./drive-carrier/carrierSettings";
 import { createDriveCarrier, type DriveCarrier } from "./drive-carrier/driveCarrierRuntime";
+import { DriveFolderRecoveryModal } from "./drive-carrier/DriveFolderRecoveryModal";
 import { createLanCarrier, type LanCarrier } from "./lan-carrier/lanCarrierRuntime";
 import { AdapterFileStore } from "./lan-carrier/lanFileStore";
 import { isLanSupported } from "./lan-carrier/lanNode";
@@ -167,6 +168,7 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 	private diskMirror: DiskMirror | null = null;
 	private attachmentOrchestrator: AttachmentOrchestrator | null = null;
 	private driveCarrier: DriveCarrier | null = null;
+	private driveRecoveryOpen = false;
 	private lanCarrier: LanCarrier | null = null;
 	private lanHost: LanSettingsHost | null = null;
 	private editorWorkspace: EditorWorkspaceOrchestrator | null = null;
@@ -2704,6 +2706,36 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 		return this.lanHost;
 	}
 
+	/** Recovery is deliberately separate from sync: the failed transport stays stopped until reload. */
+	private showDriveFolderRecovery(reason: string): void {
+		if (this.driveRecoveryOpen || this.teardownLifecycle.isClosing) return;
+		this.driveRecoveryOpen = true;
+		const vaultId = this.settings.vaultId;
+		new DriveFolderRecoveryModal(this.app, reason, {
+			choose: async (id) => {
+				if (this.settings.vaultId !== vaultId) throw new Error("Vault ID changed; reopen recovery for the current vault.");
+				const fingerprint = await this.getDriveCarrier()?.verifyRecoveryFolder(vaultId, id);
+				if (!fingerprint) throw new Error("Google Drive is not available.");
+				await this.updateSettings((settings) => {
+					settings.driveFolderId = id;
+					settings.driveFolderFingerprint = fingerprint;
+				}, "settings:drive-folder-recovery");
+				new Notice("Verified Drive folder saved. Reload the plugin to resume syncing.", 10000);
+			},
+			startNew: async () => {
+				if (this.settings.vaultId !== vaultId) throw new Error("Vault ID changed; reopen recovery for the current vault.");
+				const id = await this.getDriveCarrier()?.createRecoveryFolder(vaultId);
+				if (!id) throw new Error("Google Drive is not available.");
+				await this.updateSettings((settings) => {
+					settings.driveFolderId = id;
+					delete settings.driveFolderFingerprint;
+				}, "settings:drive-folder-new-history");
+				new Notice("A separate Drive folder was created. Reload the plugin to begin a new history; other devices must be set up for it separately.", 12000);
+			},
+			closed: () => { this.driveRecoveryOpen = false; },
+		}).open();
+	}
+
 	/** The Google Drive carrier, or null unless the user chose it. Created once, so every part shares one sign-in. */
 	private getDriveCarrier(): DriveCarrier | null {
 		if (!isDriveCarrier(this.settings)) return null;
@@ -2722,6 +2754,7 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			onFatal: (message) => {
 				new Notice(`YAOS: Google Drive sync stopped. ${message}`, 15000);
 			},
+			onFolderRecoveryRequired: (reason) => this.showDriveFolderRecovery(reason),
 			// F5: something to tell the user that is not an error (a duplicate
 			// vault folder, or an empty one about to receive a large document).
 			onNotice: (message) => {

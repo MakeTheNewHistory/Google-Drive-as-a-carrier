@@ -911,7 +911,7 @@ export class VaultSyncSettingTab extends PluginSettingTab {
 				},
 				{
 					name: "Google Drive folder",
-					desc: "The folder YAOS uses for this vault, filled in automatically after the first sync. Renaming the folder in Drive is safe: this device keeps using the same folder. Empty it to make the plugin look for the folder by name again (for example after moving the vault to another Google account). Reload the plugin after changing it.",
+					desc: "The folder YAOS uses for this vault, filled in automatically after the first sync. Renaming it in Drive is safe: this device keeps using the same folder. If it is unavailable, YAOS pauses and offers recovery choices. Empty or change this ID only after checking the right folder; reload the plugin after changing it.",
 					control: { type: "text", key: "driveFolderId", placeholder: "Found automatically" },
 				},
 				{
@@ -1238,9 +1238,9 @@ export class VaultSyncSettingTab extends PluginSettingTab {
 				return;
 			}
 			case "driveFolderId": {
-				// F5: an emptied field makes the carrier look the folder up by name
-				// again; a wrong id is harmless (it is checked before use, and the
-				// name search takes over when it does not resolve).
+				// F5: editing the folder ID clears its old fingerprint. Recovery
+				// verifies the replacement before syncing; a wrong or missing ID
+				// pauses and offers choices rather than silently making a new history.
 				const pasted = expectStringValue(key, value).trim();
 				await this.host.updateSettings((settings) => {
 					if (settings.driveFolderId !== pasted) delete settings.driveFolderFingerprint;
