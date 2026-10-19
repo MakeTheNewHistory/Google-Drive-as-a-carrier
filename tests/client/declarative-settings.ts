@@ -119,6 +119,23 @@ s.section("Declarative settings inventory");
 	s.check(!("display" in tab), "imperative display fallback is absent");
 }
 
+s.section("Drive folder binding follows explicit settings changes");
+{
+	const { tab, settings } = createFixture();
+	settings.vaultId = "vault-a";
+	settings.driveFolderId = "folder-a";
+	settings.driveFolderFingerprint = "fingerprint-a";
+	await tab.setControlValue("vaultId", "vault-a");
+	s.check(settings.driveFolderId === "folder-a" && settings.driveFolderFingerprint === "fingerprint-a", "unchanged vault keeps its folder binding");
+	await tab.setControlValue("driveFolderId", "folder-a");
+	s.check(settings.driveFolderFingerprint === "fingerprint-a", "re-entering the same folder keeps its binding");
+	await tab.setControlValue("driveFolderId", "folder-b");
+	s.check(settings.driveFolderId === "folder-b" && settings.driveFolderFingerprint === undefined, "choosing another folder invalidates the old fingerprint");
+	settings.driveFolderFingerprint = "fingerprint-b";
+	await tab.setControlValue("vaultId", "vault-b");
+	s.check(settings.driveFolderId === undefined && settings.driveFolderFingerprint === undefined, "changing vault clears both folder binding fields");
+}
+
 s.section("Control persistence and side effects");
 {
 	const { tab, settings, updateReasons, attachmentRefreshReasons } = createFixture();

@@ -2488,6 +2488,7 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 
 	private async applyDriveWizardSettings(patch: WizardSettingsPatch): Promise<void> {
 		await this.updateSettings((settings) => {
+			const vaultChanged = settings.vaultId !== patch.vaultId;
 			settings.carrier = patch.carrier;
 			settings.vaultId = patch.vaultId;
 			settings.driveClientId = patch.driveClientId;
@@ -2499,8 +2500,9 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			else delete settings.driveAuthMode;
 			// F5: a remembered Drive folder belongs to the vault it was found for.
 			// Setting up another vault must not keep pointing at the old folder.
-			if (settings.vaultId !== patch.vaultId) {
+			if (vaultChanged) {
 				delete settings.driveFolderId;
+				delete settings.driveFolderFingerprint;
 				delete settings.driveHostedUrlUsed;
 			}
 			// F4: which custom address served this sign-in (default service: not recorded).
@@ -2730,9 +2732,14 @@ export default class VaultCrdtSyncPlugin extends Plugin {
 			// in the Drive web app does not make the carrier create a second one.
 			folderIdentity: {
 				saved: () => this.settings.driveFolderId,
-				remember: (id) => {
-					if (!id || this.settings.driveFolderId === id) return;
-					void this.updateSettings((settings) => { settings.driveFolderId = id; }, "settings:drive-folder-id");
+				savedFingerprint: () => this.settings.driveFolderFingerprint,
+				remember: async (id, fingerprint) => {
+					if (!id || (this.settings.driveFolderId === id && this.settings.driveFolderFingerprint === fingerprint)) return;
+					await this.updateSettings((settings) => {
+						settings.driveFolderId = id;
+						if (fingerprint) settings.driveFolderFingerprint = fingerprint;
+						else delete settings.driveFolderFingerprint;
+					}, "settings:drive-folder-id");
 				},
 			},
 			// F4: remember the custom sign-in address that actually issued a token, so a

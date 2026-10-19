@@ -61,6 +61,8 @@ export interface DriveCarrierSettings {
 	 * then found by name again. Clearing it is always safe.
 	 */
 	driveFolderId?: string;
+	/** SHA-256 fingerprint of this folder's random meta.json installId, bound to driveFolderId. */
+	driveFolderFingerprint?: string;
 }
 
 export function currentCarrier(settings: DriveCarrierSettings): CarrierKind {

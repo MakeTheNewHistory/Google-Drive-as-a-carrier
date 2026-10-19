@@ -29,7 +29,8 @@ export interface DriveCarrierRuntimeDeps {
 	/** F5: the folder id this device used last time, and where a resolved one is saved. */
 	folderIdentity?: {
 		saved(): string | undefined;
-		remember(id: string): void;
+		savedFingerprint?(): string | undefined;
+		remember(id: string, fingerprint?: string): void | Promise<void>;
 	};
 	/**
 	 * F4: the custom sign-in address that last served this device, and where to

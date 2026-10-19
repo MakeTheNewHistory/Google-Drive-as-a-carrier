@@ -5,6 +5,7 @@ import type { SyncTransport } from "../sync/transport";
 import { makeSvEchoMessage } from "../sync/svEchoMessage";
 import { DriveError, type DriveApi, type DriveFileInfo } from "./driveApi";
 import { resolveVaultFolder } from "./driveFolders";
+import { inspectFolderFingerprint } from "./folderFingerprint";
 import { readPendingState, type PendingState } from "./yjsPending";
 import { EncryptionError } from "./driveCrypto";
 import { DriveOperation, DriveOperationStopped } from "./driveOperation";
@@ -124,7 +125,9 @@ export interface DriveTransportOptions {
 	 */
 	folderIdentity?: {
 		saved(): string | undefined;
-		remember(id: string): void;
+		/** Optional on older hosts. If present, a mismatch halts before sync writes. */
+		savedFingerprint?(): string | undefined;
+		remember(id: string, fingerprint?: string): void | Promise<void>;
 	};
 	/**
 	 * Told once per session about something the user should know but that is not
@@ -261,7 +264,7 @@ export class DriveTransport extends ObservableV2<TransportEvents> implements Syn
 		onFatal: ((message: string) => void) | undefined;
 		onNotice: ((message: string) => void) | undefined;
 		guardSchema: (() => string | null) | undefined;
-		folderIdentity: { saved(): string | undefined; remember(id: string): void } | undefined;
+		folderIdentity: { saved(): string | undefined; savedFingerprint?(): string | undefined; remember(id: string, fingerprint?: string): void | Promise<void> } | undefined;
 		folderName: string;
 		ignoreOrigin: (origin: unknown) => boolean;
 		log: (message: string) => void;
@@ -815,10 +818,11 @@ export class DriveTransport extends ObservableV2<TransportEvents> implements Syn
 		// F5: the remembered folder id wins, so a folder renamed in Drive is used
 		// again instead of a second empty folder being created (and the whole vault
 		// uploaded into it). Duplicates are reported, never deleted.
+		const savedFolderId = this.opts.folderIdentity?.saved();
 		const resolution = await op.wait(() => resolveVaultFolder(this.api, {
 			name: this.opts.folderName,
 			vaultId: this.opts.vaultId,
-			savedId: this.opts.folderIdentity?.saved(),
+			savedId: savedFolderId,
 		}));
 		op.check();
 		if (!resolution.id) throw new DriveError(500, "Could not create the vault folder");
@@ -827,17 +831,37 @@ export class DriveTransport extends ObservableV2<TransportEvents> implements Syn
 		// behind (the choice already converged on the oldest one). That used to be
 		// silent; it is not worth a Notice, but it is worth a line in the log.
 		else if (resolution.folders > 1) this.opts.log(`drive carrier: ${String(resolution.folders)} folders are named "${this.opts.folderName}"; using the oldest one`);
+		// Preserve the existing removed-folder fallback until the recovery-choice UI
+		// can ask before changing histories. A binding only verifies the same ID.
+		const expectedFingerprint = savedFolderId === resolution.id ? this.opts.folderIdentity?.savedFingerprint?.() : undefined;
+		if (expectedFingerprint) {
+			// Check the saved binding before ensureMeta can create a new metadata file.
+			const before = await op.wait(() => inspectFolderFingerprint(this.api, resolution.id));
+			op.check();
+			if (before.kind !== "identified" || before.vaultId !== this.opts.vaultId || before.fingerprint !== expectedFingerprint) {
+				throw new FatalCarrierError("The Drive folder's fingerprint does not match the one this device remembers. Sync stopped without writing. Check the Google Drive folder ID and sign-in in YAOS settings.");
+			}
+		}
 		// The folder counts as ready only once the keyring knows whether the vault is
 		// encrypted. Setting it first let a later cycle skip this step after one failed
 		// meta.json call and upload plaintext into an encrypted vault.
 		await op.wait(() => this.keyring.ensureMeta(resolution.id, op.check));
 		op.check();
 		if (!this.keyring.isReady) throw new DriveError(500, "The vault key is not ready");
+		if (this.opts.folderIdentity) {
+			const verified = await op.wait(() => inspectFolderFingerprint(this.api, resolution.id));
+			op.check();
+			if (expectedFingerprint && (verified.kind !== "identified" || verified.fingerprint !== expectedFingerprint)) {
+				throw new FatalCarrierError("The Drive folder's fingerprint changed during setup. Sync stopped without writing.");
+			}
+			const fingerprint = verified.kind === "identified" && verified.vaultId === this.opts.vaultId ? verified.fingerprint ?? undefined : undefined;
+			await op.wait(async () => { await this.opts.folderIdentity?.remember(resolution.id, fingerprint); });
+			op.check();
+		}
 		// A folder that held nothing before YAOS wrote its meta file, on a device
 		// that already has a large document: check before the first upload.
 		if (this.keyring.listedFileCount === 0) this.warnAboutEmptyVaultFolder();
 		this.folderId = resolution.id;
-		this.opts.folderIdentity?.remember(resolution.id);
 	}
 
 	/** One notice per key per session; the log line is written every time. */

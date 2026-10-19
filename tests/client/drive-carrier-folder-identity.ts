@@ -45,7 +45,7 @@ async function readMeta(drive: FakeDrive, folderName: string): Promise<Record<st
 interface Rig {
 	doc: Y.Doc;
 	text: Y.Text;
-	saved: { value: string | undefined };
+	saved: { value: string | undefined; fingerprint?: string };
 	drive: FakeDrive;
 }
 
@@ -74,7 +74,8 @@ function start(rig: Rig, name: string, extra: Partial<DriveTransportOptions> = {
 		log: (message: string) => logs.push(message),
 		folderIdentity: {
 			saved: () => rig.saved.value,
-			remember: (id: string) => { rig.saved.value = id; },
+			savedFingerprint: () => rig.saved.fingerprint,
+			remember: (id: string, fingerprint?: string) => { rig.saved.value = id; rig.saved.fingerprint = fingerprint; },
 		},
 		...extra,
 	});
@@ -152,6 +153,7 @@ s.section("Test 1: the resolved folder id is remembered and survives a rename");
 	const first = start(rig, "A");
 	await first.transport.connect();
 	s.check(rig.saved.value !== undefined, "the resolved folder id is handed back to be saved");
+	s.check(typeof rig.saved.fingerprint === "string" && rig.saved.fingerprint.length === 64, "fingerprint is saved with the folder id");
 	s.check(drive.folderById(rig.saved.value ?? "")?.name === FOLDER, `the saved id is the vault folder (${String(drive.folderById(rig.saved.value ?? "")?.name)})`);
 	s.check(drive.calls.createFolder === 1, "the folder was created once");
 
@@ -159,12 +161,14 @@ s.section("Test 1: the resolved folder id is remembered and survives a rename");
 	s.check(drive.renameFolder(FOLDER, "My YAOS vault") === 1, "the fake Drive renamed exactly one folder");
 	const filesBefore = drive.namesIn("My YAOS vault").length;
 	const savedId = rig.saved.value;
+	const savedFingerprint = rig.saved.fingerprint;
 
 	// Same document, next start: it must follow the id, not the name.
 	clock += 61_000;
 	const again = start(rig, "A");
 	await again.transport.connect();
 	s.check(rig.saved.value === savedId, "the remembered id is still the one in use");
+	s.check(rig.saved.fingerprint === savedFingerprint, "folder fingerprint survives a rename and restart");
 	s.check(drive.folderById(savedId ?? "")?.name === "My YAOS vault", "and it is the renamed folder");
 	s.check(drive.calls.createFolder === 1, `no second folder was created (${drive.calls.createFolder} createFolder calls)`);
 	s.check(drive.calls.getFile >= 1, "the saved id was checked with getFile");
@@ -172,6 +176,24 @@ s.section("Test 1: the resolved folder id is remembered and survives a rename");
 	s.check(again.notices.length === 0, `no warning for a plain rename (${again.notices.join(" | ")})`);
 	first.transport.destroy();
 	again.transport.destroy();
+}
+
+// ---------------------------------------------------------------------------
+s.section("A remembered folder with a changed fingerprint stops before sync writes");
+{
+	const drive = new FakeDrive();
+	const rig = makeRig(drive);
+	const first = start(rig, "fingerprint-a");
+	await first.transport.connect();
+	const folderId = rig.saved.value ?? "";
+	first.transport.destroy();
+	rig.saved.fingerprint = "0".repeat(64);
+	const before = (await drive.client().listFiles(folderId)).length;
+	const second = start(rig, "fingerprint-b");
+	await second.transport.connect();
+	s.check(/fingerprint/i.test(second.transport.fatalError ?? ""), "mismatched remembered hash stops sync");
+	s.check((await drive.client().listFiles(folderId)).length === before, "nothing was uploaded to the mismatched folder");
+	second.transport.destroy();
 }
 
 // ---------------------------------------------------------------------------

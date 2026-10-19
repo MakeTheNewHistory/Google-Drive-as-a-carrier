@@ -1049,7 +1049,14 @@ export class VaultSyncSettingTab extends PluginSettingTab {
 				this.update();
 				return;
 			case "vaultId":
-				await this.host.updateSettings((settings) => { settings.vaultId = expectStringValue(key, value).trim(); }, "settings:vault-id");
+				await this.host.updateSettings((settings) => {
+					const next = expectStringValue(key, value).trim();
+					if (settings.vaultId !== next) {
+						delete settings.driveFolderId;
+						delete settings.driveFolderFingerprint;
+					}
+					settings.vaultId = next;
+				}, "settings:vault-id");
 				this.update();
 				return;
 			case "updateRepoUrl":
@@ -1236,6 +1243,7 @@ export class VaultSyncSettingTab extends PluginSettingTab {
 				// name search takes over when it does not resolve).
 				const pasted = expectStringValue(key, value).trim();
 				await this.host.updateSettings((settings) => {
+					if (settings.driveFolderId !== pasted) delete settings.driveFolderFingerprint;
 					if (pasted) settings.driveFolderId = pasted;
 					else delete settings.driveFolderId;
 				}, "settings:drive-folder-id");
