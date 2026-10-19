@@ -64,9 +64,15 @@ jobs:
               styles.css \
               --clobber
           else
+            # COD-10 needs device validation before a stable release. Keep the
+            # one-off test tag prerelease without changing future release policy.
+            prerelease_args=()
+            if [ "$GITHUB_REF_NAME" = "2.1.25" ]; then
+              prerelease_args=(--prerelease --notes "TEST PRE-RELEASE: COD-10 main Drive vault-folder recovery. Real Obsidian/Google Drive validation is pending. Use a backed-up scratch vault and docs/COD-10-review-checklist.md before marking COD-10 Done.")
+            fi
             gh release create "$GITHUB_REF_NAME" \
               --title "$GITHUB_REF_NAME" \
-              --generate-notes \
+              --generate-notes "${prerelease_args[@]}" \
               yaos.zip \
               dist/release-assets/yaos-server.zip \
               dist/release-assets/update-manifest.json \
