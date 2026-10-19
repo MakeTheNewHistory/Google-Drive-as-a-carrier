@@ -24,6 +24,7 @@ import { fingerprintForInstallId, inspectFolderFingerprint } from "../../src/dri
 import { FolderRecoveryRequired, selectVerifiedFolder } from "../../src/drive-carrier/folderSelection";
 import { resolveVaultFolder } from "../../src/drive-carrier/driveFolders";
 import { createRecoveryFolder, verifyRecoveryFolder } from "../../src/drive-carrier/folderRecovery";
+import { enrollLegacyFolder } from "../../src/drive-carrier/legacyFolderEnrollment";
 import { FakeDrive } from "../mocks/fakeDrive";
 import { suite } from "../harness.ts";
 
@@ -211,6 +212,29 @@ s.section("Recovery choices validate a folder before changing settings");
 	try { await resolveVaultFolder(api, { name: FOLDER, vaultId: VAULT, savedId: wrong.id, requireExplicitRecovery: true }); }
 	catch (err) { refused = err; }
 	s.check(refused instanceof FolderRecoveryRequired, "remembered wrong-vault folder requests recovery before metadata changes");
+}
+
+// ---------------------------------------------------------------------------
+s.section("One legacy vault folder receives a stable identity without losing metadata");
+{
+	const drive = new FakeDrive();
+	const api = drive.client();
+	const folder = await api.createFolder(FOLDER);
+	const encryption = { v: 1, kdf: "pbkdf2", salt: "unchanged" };
+	await api.createFile(folder.id, META_NAME, new TextEncoder().encode(JSON.stringify({ app: "yaos-drive", schema: 1, encryption })));
+	const hash = await enrollLegacyFolder(api, folder.id, VAULT);
+	const files = await api.listFiles(folder.id);
+	const metas = files.filter((f) => f.name === META_NAME);
+	s.check(metas.length === 1 && files.some((f) => f.name === "folder-identity.json") && hash.length === 64, "one original meta and one identity marker remain");
+	const original: unknown = JSON.parse(new TextDecoder().decode(await api.readFile(metas[0]!.id)));
+	s.check(typeof original === "object" && original !== null && !("vaultId" in original) && "encryption" in original && JSON.stringify(original.encryption) === JSON.stringify(encryption), "original encryption metadata is untouched");
+	const inspected = await inspectFolderFingerprint(api, folder.id);
+	s.check(inspected.kind === "identified" && inspected.vaultId === VAULT && inspected.fingerprint === hash, "readers derive the vault fingerprint from the marker");
+	s.check((await enrollLegacyFolder(api, folder.id, VAULT)) === hash, "enrollment is idempotent");
+	const copy = await api.createFolder(FOLDER);
+	let refused = false;
+	try { await enrollLegacyFolder(api, copy.id, VAULT); } catch { refused = true; }
+	s.check(refused && (await api.listFiles(copy.id)).length === 0, "a duplicate folder cannot be enrolled automatically");
 }
 
 // ---------------------------------------------------------------------------
