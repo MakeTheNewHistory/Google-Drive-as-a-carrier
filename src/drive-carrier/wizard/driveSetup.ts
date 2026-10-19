@@ -1,5 +1,5 @@
 import { DriveError, type DriveApi } from "../driveApi";
-import { ensureFolder, oldestFirst } from "../driveFolders";
+import { oldestFirst, resolveVaultFolder } from "../driveFolders";
 import { DriveKeyring, DRIVE_LAYOUT_SCHEMA } from "../driveKeyring";
 import { EncryptionError, parseEncryptionMeta, unlockEncryption } from "../driveCrypto";
 import { META_NAME } from "../fileFormat";
@@ -63,7 +63,9 @@ export async function createVault(api: DriveApi, options: CreateVaultOptions): P
 		}
 	};
 
-	const folderId = await run("folder", () => ensureFolder(api, driveFolderLabel(options.vaultId)));
+	const folderId = await run("folder", async () => (await resolveVaultFolder(api, {
+		name: driveFolderLabel(options.vaultId), vaultId: options.vaultId,
+	})).id);
 	const marker = new TextEncoder().encode(`yaos setup check ${options.vaultId}`);
 	const written = await run("write", () => api.createFile(folderId, TEST_FILE_NAME, marker));
 	await run("read", async () => {
@@ -100,9 +102,15 @@ export async function checkVaultForJoin(api: DriveApi, vaultId: string, passphra
 	const folders = await api.findFolders(driveFolderLabel(vaultId));
 	if (folders.length === 0) return { status: "not-found" };
 	const sorted = [...folders].sort((a, b) => a.createdTime - b.createdTime || (a.id < b.id ? -1 : 1));
-	const folder = sorted[0];
-	if (!folder) return { status: "not-found" };
-	const meta = oldestFirst((await api.listFiles(folder.id)).filter((f) => f.name === META_NAME))[0];
+	const oldest = sorted[0];
+	if (!oldest) return { status: "not-found" };
+	// Reuse the transport's narrow verified-match recovery when an older folder
+	// holds another vault. One-folder and ambiguous histories keep their prior
+	// behavior until the explicit recovery-choice UI is available.
+	const folderId = folders.length > 1
+		? (await resolveVaultFolder(api, { name: driveFolderLabel(vaultId), vaultId })).id
+		: oldest.id;
+	const meta = oldestFirst((await api.listFiles(folderId)).filter((f) => f.name === META_NAME))[0];
 	if (!meta) return { status: "not-found" };
 	let record: Record<string, unknown> = {};
 	try {

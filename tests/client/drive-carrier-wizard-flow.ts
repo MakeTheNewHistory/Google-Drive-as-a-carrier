@@ -636,6 +636,24 @@ s.section("Test 13: createVault on its own");
 	s.check(failed, "a failing read stops it with the Drive error");
 }
 
+s.section("COD-10: wizard targets the verified folder instead of an older wrong vault");
+{
+	const drive = new FakeDrive();
+	const api = drive.client();
+	const vaultId = "wizardCOD10";
+	const name = `YAOS ${vaultId}`;
+	const wrong = await api.createFolder(name);
+	await api.createFile(wrong.id, "meta.json", new TextEncoder().encode(JSON.stringify({ app: "yaos-drive", schema: 1, vaultId: "another-vault", installId: "wrong" })));
+	const right = await api.createFolder(name);
+	await api.createFile(right.id, "meta.json", new TextEncoder().encode(JSON.stringify({ app: "yaos-drive", schema: 1, vaultId, installId: "right" })));
+	const checked = await checkVaultForJoin(api, vaultId, "");
+	s.check(checked.status === "ok", "join check reads the matching folder");
+	const steps = await createVault(api, { vaultId, passphrase: "" });
+	s.check(steps.every((step) => step.status === "done"), "create flow verifies the matching folder");
+	s.check((await api.listFiles(wrong.id)).length === 1, "setup probe never writes into the wrong vault");
+	s.check((await api.listFiles(right.id)).length === 1, "setup probe is cleaned up from the matching vault");
+}
+
 async function toHostedToken(rig: Rig): Promise<void> {
 	await rig.c.next();
 	rig.c.choosePath("new");
